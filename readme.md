@@ -1,33 +1,205 @@
-# Backend dev technical test
-We want to offer a new feature to our customers showing similar products to the one they are currently seeing. To do this we agreed with our front-end applications to create a new REST API operation that will provide them the product detail of the similar products for a given one. [Here](./similarProducts.yaml) is the contract we agreed.
+# Similar Products API
 
-We already have an endpoint that provides the product Ids similar for a given one. We also have another endpoint that returns the product detail by product Id. [Here](./existingApis.yaml) is the documentation of the existing APIs.
+Reactive Spring Boot implementation of the backend technical test. It exposes the product details
+most similar to a requested product while preserving the similarity order returned by the existing
+product service.
 
-**Create a Spring boot application that exposes the agreed REST API on port 5000.**
+> A Spanish translation is available at [`readme.es.md`](readme.es.md). This English version is the
+> canonical reference.
 
-![Diagram](./assets/diagram.jpg "Diagram")
+## Requirements
 
-Note that _Test_ and _Mocks_ components are given, you must only implement _yourApp_.
+- Java 21
+- Maven 3.9+
+- Docker and Docker Compose for the supplied mocks and k6 test
 
-## Testing and Self-evaluation
-You can run the same test we will put through your application. You just need to have docker installed.
+## Run locally
 
-First of all, you may need to enable file sharing for the `shared` folder on your docker dashboard -> settings -> resources -> file sharing.
+Start the supplied product API mock and, optionally, the performance dashboards:
 
-Then you can start the mocks and other needed infrastructure with the following command.
+```bash
+docker compose up -d simulado influxdb grafana
 ```
-docker-compose up -d simulado influxdb grafana
-```
-Check that mocks are working with a sample request to [http://localhost:3001/product/1/similarids](http://localhost:3001/product/1/similarids).
 
-To execute the test run:
-```
-docker-compose run --rm k6 run scripts/test.js
-```
-Browse [http://localhost:3000/d/Le2Ku9NMk/k6-performance-test](http://localhost:3000/d/Le2Ku9NMk/k6-performance-test) to view the results.
+Check that the mock is available:
 
-## Evaluation
-The following topics will be considered:
-- Code clarity and maintainability
-- Performance
-- Resilience
+```bash
+curl http://localhost:3001/product/1/similarids
+```
+
+Run the application:
+
+```bash
+mvn spring-boot:run
+```
+
+The API listens on port `5000`:
+
+```bash
+curl http://localhost:5000/product/1/similar
+```
+
+Build the executable jar and run it directly if preferred:
+
+```bash
+mvn clean package
+java -jar target/similar-products-1.0.0.jar
+```
+
+## Tests
+
+Run the full unit and integration suite:
+
+```bash
+mvn clean verify
+```
+
+With the application and the supplied infrastructure running, execute the original load test:
+
+```bash
+docker compose run --rm k6 run scripts/test.js
+```
+
+Its Grafana dashboard is available at
+[`http://localhost:3000/d/Le2Ku9NMk/k6-performance-test`](http://localhost:3000/d/Le2Ku9NMk/k6-performance-test).
+
+## API contract
+
+```http
+GET /product/{productId}/similar
+```
+
+A successful response is an ordered JSON array:
+
+```json
+[
+  {
+    "id": "2",
+    "name": "Dress",
+    "price": 19.99,
+    "availability": true
+  }
+]
+```
+
+The source contracts remain in [`existingApis.yaml`](existingApis.yaml) and
+[`similarProducts.yaml`](similarProducts.yaml).
+
+## Architecture
+
+The application uses a deliberately small hexagonal architecture:
+
+```text
+Inbound REST adapter
+        |
+        v
+GetSimilarProductsUseCase (input port)
+        |
+        v
+GetSimilarProductsService
+        |
+        v
+ProductProviderPort (output port)
+        |
+        v
+Caching adapter -> HTTP adapter -> external product API
+```
+
+- `domain`: immutable `Product` model with no Spring or HTTP dependencies.
+- `application`: input/output ports, provider-neutral exceptions, and use-case orchestration.
+- `infrastructure.adapter.in.rest`: the thin WebFlux controller and HTTP error translation.
+- `infrastructure.adapter.out.http`: WebClient communication and DTO-to-domain mapping.
+- `infrastructure.adapter.out.cache`: Caffeine caching and concurrent request coalescing.
+- `infrastructure.config`: typed configuration and dependency wiring.
+
+The application service depends only on `ProductProviderPort`. Spring configuration chooses the
+HTTP and caching implementations, so infrastructure can be replaced without modifying the use case.
+
+## Concurrency and ordering
+
+After retrieving the similar IDs, product details are requested through Reactor
+`flatMapSequential`. It subscribes to independent detail requests concurrently up to the configured
+limit, but emits successful products in the original similarity order. There is no blocking call,
+manual subscription, or auxiliary thread pool in the request flow.
+
+The default concurrency is eight. The current mocks return three IDs, while the higher ceiling also
+supports larger lists without creating unbounded downstream load.
+
+## Failure policy
+
+The initial `similarids` call defines the operation and therefore fails the request when it cannot be
+completed:
+
+| Downstream result | API result |
+|---|---|
+| `404` | `404 Not Found` |
+| timeout | `504 Gateway Timeout` |
+| `5xx`, connection or invalid response | `502 Bad Gateway` |
+
+A product-detail call is an independent enrichment. Its `404`, `5xx`, timeout, connection error, or
+invalid response is omitted while the remaining products continue. This provides useful partial
+results and matches the explicit failure scenarios in the supplied mocks.
+
+Expected partial failures are logged at debug level without stack traces. Primary provider failures
+are logged once by the REST error handler with operation context.
+
+## Timeouts
+
+Reactor Netty has explicit connection and response/read timeouts. Defaults are one and eight seconds
+respectively. Eight seconds allows the valid five-second mock to complete while cutting off the
+deliberately pathological 50-second response. Both values can be changed without recompilation.
+
+No automatic retry is used. Retrying the load test's deterministic `404`, `500`, or 50-second delay
+would amplify traffic and latency. A narrowly scoped retry policy would only be appropriate with
+real evidence about transient production failures.
+
+## Cache
+
+Only successful product details are stored in a bounded, five-minute Caffeine cache. Similar-ID
+lists, errors, timeouts, and missing products are not cached. A per-key reactive in-flight registry
+coalesces simultaneous cache misses, preventing hundreds of requests for the same product from
+creating hundreds of downstream calls. The in-flight entry is removed on success or failure.
+
+The cache is intentionally local: it is fast, bounded, and sufficient for this single-process test.
+Redis would add infrastructure and operational failure modes without improving the required result.
+In a horizontally scaled production deployment, a distributed cache or event-driven invalidation
+could be evaluated based on consistency requirements.
+
+## Configuration
+
+Defaults live in `src/main/resources/application.yml` and can be overridden with environment
+variables:
+
+| Setting | Environment variable | Default |
+|---|---|---|
+| Server port | `SERVER_PORT` | `5000` |
+| External base URL | `EXTERNAL_API_BASE_URL` | `http://localhost:3001` |
+| Connection timeout | `EXTERNAL_API_CONNECT_TIMEOUT` | `1s` |
+| Response/read timeout | `EXTERNAL_API_RESPONSE_TIMEOUT` | `8s` |
+| Detail concurrency | `SIMILAR_PRODUCTS_MAX_CONCURRENCY` | `8` |
+| Cache maximum size | `PRODUCT_CACHE_MAXIMUM_SIZE` | `1000` |
+| Cache TTL | `PRODUCT_CACHE_TTL` | `5m` |
+
+Spring Boot already maps `SERVER_PORT`; the remaining variables are declared explicitly. Typed
+configuration rejects invalid sizes, concurrency, URLs, TTLs, and timeouts during startup.
+
+## Test coverage
+
+The automated suite covers:
+
+- correct aggregation, empty results, order under out-of-order completion, and maximum concurrency;
+- partial `404`, `500`, and timeout handling, plus propagation of the initial lookup failure;
+- WebClient JSON mapping, numeric/string IDs, status classification, invalid data, and real timeout;
+- successful cache hits, TTL expiry, non-caching of errors, and single-flight behavior;
+- REST status, media type, JSON structure, and error mapping;
+- a full Spring Boot request through controller, service, cache, WebClient, and a MockWebServer.
+
+## Trade-offs and production evolution
+
+There is no database because the service owns no persistent state. There is no circuit breaker:
+timeouts, bounded concurrency, partial-result handling, and request coalescing cover the demonstrated
+failure modes with less state and ceremony.
+
+For production, the next additions would be Micrometer latency/cache metrics, distributed tracing,
+structured logs, and downstream saturation alerts. A circuit breaker, bulkhead, rate limiting, or
+distributed cache should be introduced only after traffic and failure data establishes the need.
