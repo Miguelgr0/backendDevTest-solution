@@ -10,10 +10,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up JDK 25
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           java-version: '25'
           distribution: temurin
@@ -21,3 +21,48 @@ jobs:
 
       - name: Build and test
         run: mvn --batch-mode clean verify
+
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build the image
+        run: docker build -t similar-products .
+
+      - name: Start the supplied product API mock
+        run: docker compose up -d simulado
+
+      # Runs the container exactly as the README documents it, so the documented
+      # command stays verified rather than assumed.
+      - name: Run the container against the mock
+        run: |
+          docker run -d --name similar-products-smoke -p 5000:5000 \
+            --add-host=host.docker.internal:host-gateway \
+            -e EXTERNAL_API_BASE_URL=http://host.docker.internal:3001 \
+            similar-products
+
+      - name: Wait until the service reports healthy
+        run: |
+          for attempt in $(seq 1 30); do
+            if curl -fs http://localhost:5000/actuator/health | grep -q '"status":"UP"'; then
+              echo "Service is up after ${attempt} attempt(s)"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Service did not become healthy"
+          docker logs similar-products-smoke
+          exit 1
+
+      - name: Verify the similar products contract end to end
+        run: |
+          body=$(curl -fs http://localhost:5000/product/1/similar)
+          echo "$body"
+          echo "$body" | grep -q '"id":"2"' || { echo "Missing product 2"; exit 1; }
+          echo "$body" | grep -q '"id":"3"' || { echo "Missing product 3"; exit 1; }
+          echo "$body" | grep -q '"id":"4"' || { echo "Missing product 4"; exit 1; }
+
+      - name: Show container logs
+        if: always()
+        run: docker logs similar-products-smoke
