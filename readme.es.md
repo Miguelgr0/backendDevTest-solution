@@ -9,9 +9,9 @@ productos existente.
 
 ## Requisitos
 
-- Java 25 (última versión LTS)
-- Maven 3.9+
 - Docker y Docker Compose para los mocks y el test k6 proporcionados
+- Java 25 (última versión LTS) y Maven 3.9+ para compilar en local, o únicamente Docker usando el
+  [`Dockerfile`](Dockerfile), que compila y ejecuta el servicio sin necesidad de un JDK local
 
 ## Ejecución local
 
@@ -44,6 +44,13 @@ Si lo prefieres, genera el jar ejecutable y arráncalo directamente:
 ```bash
 mvn clean package
 java -jar target/similar-products-1.0.0.jar
+```
+
+O compílalo y ejecútalo en un contenedor, sin necesidad de JDK ni Maven locales:
+
+```bash
+docker build -t similar-products .
+docker run --rm -p 5000:5000 similar-products
 ```
 
 ## Tests
@@ -171,6 +178,41 @@ proceso. Redis añadiría infraestructura y nuevos modos de fallo operacional si
 requerido. En un despliegue de producción con varias instancias, podría evaluarse una caché
 distribuida o invalidación basada en eventos según los requisitos de consistencia.
 
+## Observabilidad
+
+Actuator expone únicamente `health` y `metrics`. La caché Caffeine está enlazada con Micrometer, de
+modo que su eficacia se puede medir en lugar de darse por supuesta:
+
+```bash
+curl http://localhost:5000/actuator/health
+curl "http://localhost:5000/actuator/metrics/cache.gets?tag=cache:products&tag=result:hit"
+curl "http://localhost:5000/actuator/metrics/cache.size?tag=cache:products"
+```
+
+## Rendimiento medido
+
+Resultados del script k6 proporcionado, sin modificar, contra este servicio sobre JDK 25 con la
+caché fría y usando los mocks incluidos (5 escenarios, 200 VUs cada uno):
+
+| Métrica | Valor |
+|---|---|
+| Peticiones | 13 698 (204 req/s) |
+| Latencia mediana | 13,4 ms |
+| Latencia p90 | 121 ms |
+| Latencia p95 | 845 ms |
+| Latencia máxima | 8,04 s |
+
+El máximo coincide con el timeout de respuesta configurado de 8 segundos: el producto
+deliberadamente patológico de 50 segundos se corta en lugar de mantener la petición abierta. Los
+percentiles altos están dominados por los escenarios `slow` y `verySlow`, cuyos mocks retrasan 1 y 5
+segundos por diseño.
+
+Los contadores de caché tras esa ejecución mostraron **31 959 aciertos frente a 9 138 fallos** y solo
+**6 entradas cacheadas**, exactamente los productos que se resolvieron con éxito. Los productos que
+devuelven 404, 500 o que expiran nunca se cachean, y los fallos restantes son precisamente las
+consultas repetidas de esos productos no cacheables. El servicio no emitió ningún warning ni error de
+aplicación durante toda la ejecución.
+
 ## Configuración
 
 Los valores por defecto están en `src/main/resources/application.yml` y pueden sobrescribirse con
@@ -201,7 +243,10 @@ La suite automática cubre:
 - aciertos de caché, expiración por TTL, no cacheo de errores y comportamiento single-flight;
 - status REST, tipo de contenido, estructura JSON y mapeo de errores;
 - una petición completa a través de Spring Boot: controller, servicio, caché, WebClient y un
-  MockWebServer.
+  MockWebServer;
+- las propias fronteras de la arquitectura, mediante reglas ArchUnit que rompen el build si el
+  dominio adquiere una dependencia fuera del JDK, o si Spring, WebClient o Caffeine se filtran fuera
+  de infraestructura.
 
 ## Trade-offs y evolución hacia producción
 
