@@ -14,6 +14,12 @@ cache:
     maximum-size: ${PRODUCT_CACHE_MAXIMUM_SIZE:1000}
     ttl: ${PRODUCT_CACHE_TTL:5m}
 
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics
+
 logging:
   level:
     com.inditex.similarproducts: INFO

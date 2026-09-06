@@ -8,6 +8,8 @@ import com.inditex.similarproducts.application.service.GetSimilarProductsService
 import com.inditex.similarproducts.domain.model.Product;
 import com.inditex.similarproducts.infrastructure.adapter.out.cache.CachingProductProviderAdapter;
 import com.inditex.similarproducts.infrastructure.adapter.out.http.ProductApiAdapter;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.binder.cache.CaffeineCacheMetrics;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -19,15 +21,19 @@ import org.springframework.web.reactive.function.client.WebClient;
 public class ProductProviderConfig {
 
     /**
-     * Creates a bounded cache that expires entries after their successful write.
+     * Creates a bounded cache that expires entries after their successful write. Its statistics are
+     * published to Micrometer so hit ratio and evictions are observable at runtime instead of
+     * being an untested assumption.
      */
     @Bean
-    Cache<String, Product> productCache(ProductCacheProperties properties) {
-        return Caffeine.newBuilder()
+    Cache<String, Product> productCache(ProductCacheProperties properties, MeterRegistry meterRegistry) {
+        Cache<String, Product> cache = Caffeine.newBuilder()
                 .maximumSize(properties.maximumSize())
                 .expireAfterWrite(properties.ttl())
                 .recordStats()
                 .build();
+
+        return CaffeineCacheMetrics.monitor(meterRegistry, cache, "products");
     }
 
     @Bean
