@@ -52,8 +52,15 @@ O compílalo y ejecútalo en un contenedor, sin necesidad de JDK ni Maven locale
 
 ```bash
 docker build -t similar-products .
-docker run --rm -p 5000:5000 similar-products
+docker run --rm -p 5000:5000 \
+  --add-host=host.docker.internal:host-gateway \
+  -e EXTERNAL_API_BASE_URL=http://host.docker.internal:3001 \
+  similar-products
 ```
+
+El mock continúa ejecutándose en el host mediante el Compose proporcionado. La URL base explícita es
+necesaria porque `localhost` dentro del contenedor de la aplicación apunta al propio contenedor, no
+al host.
 
 ## Tests
 
@@ -134,8 +141,11 @@ independientes hasta el límite configurado, pero emite los productos obtenidos 
 original de similitud. No hay ninguna llamada bloqueante, suscripción manual ni pool de hilos
 auxiliar en el flujo de la petición.
 
-La concurrencia por defecto es de ocho. Los mocks actuales devuelven tres IDs, pero el límite más
-alto también soporta listas más grandes sin generar una carga descontrolada hacia el proveedor.
+La concurrencia por defecto es de ocho **por petición entrante**. Los mocks actuales devuelven tres
+IDs, pero el límite más alto también soporta listas mayores sin permitir que una sola petición se
+suscriba a todos los detalles a la vez. Reactor Netty reutiliza un pool de conexiones, pero este
+ajuste no es un bulkhead global para todo el proceso. Un límite global debería dimensionarse a partir
+de la capacidad real del proveedor y del perfil de tráfico, no añadirse sin datos operativos.
 
 ## Política de errores
 
@@ -193,8 +203,9 @@ curl "http://localhost:5000/actuator/metrics/cache.size?tag=cache:products"
 
 ## Rendimiento medido
 
-Resultados del script k6 proporcionado, sin modificar, contra este servicio sobre JDK 25 con la
-caché fría y usando los mocks incluidos (5 escenarios, 200 VUs cada uno):
+Una ejecución concreta del script k6 proporcionado, sin modificar, el 2026-09-06: JDK 25, caché
+fría, con la aplicación y los mocks proporcionados ejecutándose todos en contenedores sobre un único
+portátil con Windows 10 (Podman sobre WSL 2). El script lanza 5 escenarios de 200 VUs cada uno.
 
 | Métrica | Valor |
 |---|---|
@@ -203,6 +214,11 @@ caché fría y usando los mocks incluidos (5 escenarios, 200 VUs cada uno):
 | Latencia p90 | 121 ms |
 | Latencia p95 | 845 ms |
 | Latencia máxima | 8,04 s |
+
+Son los números de esa única ejecución sobre ese hardware, no una garantía. El generador de carga, la
+aplicación y los mocks competían por la misma CPU, y la cola se mueve de forma apreciable entre
+ejecuciones: una ejecución anterior del mismo código en la misma máquina dio un p95 de 220 ms. Lo
+estable es la forma, no las cifras.
 
 El máximo coincide con el timeout de respuesta configurado de 8 segundos: el producto
 deliberadamente patológico de 50 segundos se corta en lugar de mantener la petición abierta. Los

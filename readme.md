@@ -52,8 +52,14 @@ Or build and run it in a container, which needs no local JDK or Maven:
 
 ```bash
 docker build -t similar-products .
-docker run --rm -p 5000:5000 similar-products
+docker run --rm -p 5000:5000 \
+  --add-host=host.docker.internal:host-gateway \
+  -e EXTERNAL_API_BASE_URL=http://host.docker.internal:3001 \
+  similar-products
 ```
+
+The mock still runs on the host through the supplied Compose file. The explicit base URL is required
+because `localhost` inside the application container refers to that container, not to the host.
 
 ## Tests
 
@@ -131,8 +137,11 @@ After retrieving the similar IDs, product details are requested through Reactor
 limit, but emits successful products in the original similarity order. There is no blocking call,
 manual subscription, or auxiliary thread pool in the request flow.
 
-The default concurrency is eight. The current mocks return three IDs, while the higher ceiling also
-supports larger lists without creating unbounded downstream load.
+The default concurrency is eight **per incoming request**. The current mocks return three IDs, while
+the higher ceiling also supports larger lists without allowing one request to subscribe to every
+detail at once. Reactor Netty reuses a connection pool, but this setting is not a process-wide
+bulkhead. A global limit should be sized from the real provider capacity and traffic profile rather
+than introduced without operational data.
 
 ## Failure policy
 
@@ -187,8 +196,9 @@ curl "http://localhost:5000/actuator/metrics/cache.size?tag=cache:products"
 
 ## Measured performance
 
-Results of the supplied k6 script, unmodified, against this service on JDK 25 with a cold cache,
-using the provided mocks (5 scenarios, 200 VUs each):
+One concrete run of the supplied k6 script, unmodified, on 2026-09-06: JDK 25, cold cache, with the
+application and the supplied mocks all containerised on a single Windows 10 laptop (Podman on
+WSL 2). The script drives 5 scenarios of 200 VUs each.
 
 | Metric | Value |
 |---|---|
@@ -197,6 +207,11 @@ using the provided mocks (5 scenarios, 200 VUs each):
 | p90 latency | 121 ms |
 | p95 latency | 845 ms |
 | Max latency | 8.04 s |
+
+These are the numbers of that one run on that hardware, not a guarantee. The load generator, the
+application and the mocks all competed for the same CPU, and the tail moves noticeably between
+runs: an earlier run of the same code on the same machine reported a p95 of 220 ms. What is stable
+is the shape, not the digits.
 
 The maximum tracks the configured 8-second response timeout: the deliberately pathological
 50-second product is cut off rather than allowed to hold the request open. The tail percentiles are
