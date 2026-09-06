@@ -9,7 +9,7 @@ product service.
 
 ## Requirements
 
-- Java 21
+- Java 25 (latest LTS release)
 - Maven 3.9+
 - Docker and Docker Compose for the supplied mocks and k6 test
 

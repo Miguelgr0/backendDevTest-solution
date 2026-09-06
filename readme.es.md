@@ -9,7 +9,7 @@ productos existente.
 
 ## Requisitos
 
-- Java 21
+- Java 25 (última versión LTS)
 - Maven 3.9+
 - Docker y Docker Compose para los mocks y el test k6 proporcionados
 
