@@ -158,6 +158,10 @@ A product-detail call is an independent enrichment. Its `404`, `5xx`, timeout, c
 invalid response is omitted while the remaining products continue. This provides useful partial
 results and matches the explicit failure scenarios in the supplied mocks.
 
+That tolerance is deliberately limited to failures reported through the provider port. An unexpected
+error is a defect in this service, not a downstream problem, so it propagates instead of being
+disguised as a product that happens to be unavailable.
+
 Expected partial failures are logged at debug level without stack traces. Primary provider failures
 are logged once by the REST error handler with operation context.
 

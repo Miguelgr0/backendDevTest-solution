@@ -163,6 +163,10 @@ error de conexión o respuesta inválida se omite y el resto de productos contin
 resultados parciales útiles y coincide con los escenarios de fallo explícitos de los mocks
 proporcionados.
 
+Esa tolerancia se limita deliberadamente a los fallos reportados a través del puerto del proveedor.
+Un error inesperado es un defecto de este servicio, no un problema del proveedor, así que se propaga
+en lugar de disfrazarse de producto que casualmente no está disponible.
+
 Los fallos parciales esperados se registran en nivel debug sin stacktrace. Los fallos del proveedor
 principal se registran una única vez en el manejador de errores REST, con contexto de la operación.
 
