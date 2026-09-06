@@ -80,6 +80,16 @@ class GetSimilarProductsServiceTest {
     }
 
     @Test
+    void propagatesUnexpectedFailureOfAnIndividualProduct() {
+        when(productProvider.getSimilarProductIds("1")).thenReturn(Mono.just(List.of("2")));
+        when(productProvider.getProduct("2")).thenReturn(Mono.error(new IllegalStateException("defect")));
+
+        StepVerifier.create(service.getSimilarProducts("1"))
+                .expectError(IllegalStateException.class)
+                .verify();
+    }
+
+    @Test
     void propagatesFailureFromSimilarIdsEndpoint() {
         ProductProviderUnavailableException failure = new ProductProviderUnavailableException("HTTP 500");
         when(productProvider.getSimilarProductIds("1")).thenReturn(Mono.error(failure));

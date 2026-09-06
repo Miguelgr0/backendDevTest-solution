@@ -1,5 +1,6 @@
 package com.inditex.similarproducts.application.service;
 
+import com.inditex.similarproducts.application.exception.ProductProviderException;
 import com.inditex.similarproducts.application.port.in.GetSimilarProductsUseCase;
 import com.inditex.similarproducts.application.port.out.ProductProviderPort;
 import com.inditex.similarproducts.domain.model.Product;
@@ -41,9 +42,11 @@ public final class GetSimilarProductsService implements GetSimilarProductsUseCas
 
     private Mono<Product> getProductSafely(String productId) {
         return productProvider.getProduct(productId)
-                .onErrorResume(error -> {
-                    // Detail enrichment is best-effort. Recovery is scoped to this inner publisher
-                    // so a failure cannot cancel other details or hide a similar-IDs failure.
+                // Only provider failures are expected and degrade to a partial result. Anything else
+                // is a defect in this service and must surface instead of silently losing a product.
+                .onErrorResume(ProductProviderException.class, error -> {
+                    // Recovery is scoped to this inner publisher so a failure cannot cancel other
+                    // details or hide a similar-IDs failure.
                     log.debug("Omitting similar product {} because it could not be retrieved: {}",
                             productId, error.getMessage());
                     return Mono.empty();
