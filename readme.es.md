@@ -1,5 +1,7 @@
 # Similar Products API
 
+[![build](https://github.com/Miguelgr0/backendDevTest-solution/actions/workflows/build.yml/badge.svg)](https://github.com/Miguelgr0/backendDevTest-solution/actions/workflows/build.yml)
+
 Implementación reactiva en Spring Boot de la prueba técnica de backend. Expone los detalles de los
 productos más similares a uno dado, preservando el orden de similitud devuelto por el servicio de
 productos existente.
